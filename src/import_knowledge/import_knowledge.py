@@ -66,7 +66,7 @@ def initLocalEmbedding(model_name=None):
     init_embeddings(mode="local", model_name=model_name)
     return _embedding_model
 
-def _embed_batch(texts):
+def embed_batch(texts):
     """Embed a list of texts. Uses either OpenAI or local SentenceTransformer."""
     global EMBEDDING_MODE, EMBEDDING_MODEL, _embedding_model, _openai_client
     
@@ -201,7 +201,7 @@ def main():
             batch_metas = metadatas[i:end]
             
             try:
-                batch_embeddings = _embed_batch(batch_docs)
+                batch_embeddings = embed_batch(batch_docs)
             except Exception as e:
                 print(f"Fatal error generating embeddings: {e}")
                 return

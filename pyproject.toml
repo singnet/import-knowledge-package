@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "import-kb"
-version = "0.1.8"
+version = "0.2.3"
 description = "A package for importing knowledge and embedding text."
 readme = "README.md"
 authors = [
@@ -17,7 +17,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 dependencies = [
     "openai>=1.0.0",
     "chromadb>=0.3.21",
