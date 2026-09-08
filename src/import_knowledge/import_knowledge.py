@@ -15,9 +15,23 @@ load_dotenv()
 _PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- Configuration ---
-EMBEDDING_MODE = "openai" # "openai" or "local"
+EMBEDDING_MODE = "openai" # "openai", "asicloud", or "local"
 EMBEDDING_MODEL = "text-embedding-3-large"
 LOCAL_MODEL_NAME = "intfloat/e5-large-v2"
+
+# Cloud embedding providers. Each maps to an OpenAI-compatible endpoint.
+PROVIDERS = {
+    "openai": {
+        "base_url": None,
+        "api_key_env": "OPENAI_API_KEY",
+        "default_model": "text-embedding-3-large",
+    },
+    "asicloud": {
+        "base_url": "https://inference.asicloud.cudos.org/v1",
+        "api_key_env": "ASI_API_KEY",
+        "default_model": "WhereIsAI/UAE-Large-V1",
+    },
+}
 COLLECTION_NAME = "memories"
 KNOWLEDGE_FILES = [
     os.path.join(_PACKAGE_DIR, "KB", "oma_distilled_knowledge.jsonl"),
@@ -41,13 +55,23 @@ _embedding_model = None
 _openai_client = None
 
 def init_embeddings(mode="openai", model_name=None):
-    """
-    Initialize the embedding system. 
+    """Initialize the embedding system.
+
     Can be called programmatically after import to switch modes.
+
+    Args:
+        mode: "local" for offline SentenceTransformers, or a provider id
+            from PROVIDERS (e.g. "openai", "asicloud") for a cloud API.
+        model_name: Overrides the default model for the selected mode.
+
+    Raises:
+        ValueError: If mode is not "local" and not a known provider id.
+        RuntimeError: If the provider's required API key environment
+            variable is not set.
     """
     global EMBEDDING_MODE, EMBEDDING_MODEL, LOCAL_MODEL_NAME, _embedding_model, _openai_client
     EMBEDDING_MODE = mode
-    
+
     if mode == "local":
         if model_name:
             LOCAL_MODEL_NAME = model_name
@@ -55,11 +79,23 @@ def init_embeddings(mode="openai", model_name=None):
             from sentence_transformers import SentenceTransformer
             print(f"Loading local SentenceTransformer model: {LOCAL_MODEL_NAME}...")
             _embedding_model = SentenceTransformer(LOCAL_MODEL_NAME)
-    else:
-        if model_name:
-            EMBEDDING_MODEL = model_name
+    elif mode == "openai":
+        EMBEDDING_MODEL = model_name or PROVIDERS["openai"]["default_model"]
         if _openai_client is None:
             _openai_client = openai.OpenAI()
+    elif mode in PROVIDERS:
+        provider = PROVIDERS[mode]
+        EMBEDDING_MODEL = model_name or provider["default_model"]
+        if _openai_client is None:
+            api_key = os.environ.get(provider["api_key_env"])
+            if not api_key:
+                raise RuntimeError(
+                    f"Missing required environment variable {provider['api_key_env']} "
+                    f"for provider '{mode}'"
+                )
+            _openai_client = openai.OpenAI(api_key=api_key, base_url=provider["base_url"])
+    else:
+        raise ValueError(f"Unknown embedding provider: {mode!r}")
 
 def initLocalEmbedding(model_name=None):
     """Convenience function matching user snippet."""
@@ -85,11 +121,18 @@ def embed_batch(texts):
 def main():
     parser = argparse.ArgumentParser(description="Import knowledge into ChromaDB.")
     parser.add_argument("--local", action="store_true", help="Use local SentenceTransformer embeddings")
+    parser.add_argument(
+        "--provider",
+        type=str,
+        choices=sorted(PROVIDERS),
+        default="openai",
+        help="Cloud embedding provider to use (ignored when --local is set)",
+    )
     parser.add_argument("--model", type=str, help="Override default model name (OpenAI or local)")
     args = parser.parse_args()
 
     # Initialize based on arguments
-    mode = "local" if args.local else "openai"
+    mode = "local" if args.local else args.provider
     init_embeddings(mode=mode, model_name=args.model)
 
     has_any_knowledge = any(Path(f).exists() for f in KNOWLEDGE_FILES)
