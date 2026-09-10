@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 from pathlib import Path
 import chromadb
@@ -53,6 +54,7 @@ LOCAL_DEVICE = os.environ.get(
 
 _embedding_model = None
 _openai_client = None
+_openai_client_mode = None
 
 def init_embeddings(mode="openai", model_name=None):
     """Initialize the embedding system.
@@ -69,8 +71,7 @@ def init_embeddings(mode="openai", model_name=None):
         RuntimeError: If the provider's required API key environment
             variable is not set.
     """
-    global EMBEDDING_MODE, EMBEDDING_MODEL, LOCAL_MODEL_NAME, _embedding_model, _openai_client
-    EMBEDDING_MODE = mode
+    global EMBEDDING_MODE, EMBEDDING_MODEL, LOCAL_MODEL_NAME, _embedding_model, _openai_client, _openai_client_mode
 
     if mode == "local":
         if model_name:
@@ -80,13 +81,13 @@ def init_embeddings(mode="openai", model_name=None):
             print(f"Loading local SentenceTransformer model: {LOCAL_MODEL_NAME}...")
             _embedding_model = SentenceTransformer(LOCAL_MODEL_NAME)
     elif mode == "openai":
-        EMBEDDING_MODEL = model_name or PROVIDERS["openai"]["default_model"]
-        if _openai_client is None:
+        if _openai_client is None or _openai_client_mode != mode:
             _openai_client = openai.OpenAI()
+            _openai_client_mode = mode
+        EMBEDDING_MODEL = model_name or PROVIDERS["openai"]["default_model"]
     elif mode in PROVIDERS:
         provider = PROVIDERS[mode]
-        EMBEDDING_MODEL = model_name or provider["default_model"]
-        if _openai_client is None:
+        if _openai_client is None or _openai_client_mode != mode:
             api_key = os.environ.get(provider["api_key_env"])
             if not api_key:
                 raise RuntimeError(
@@ -94,8 +95,12 @@ def init_embeddings(mode="openai", model_name=None):
                     f"for provider '{mode}'"
                 )
             _openai_client = openai.OpenAI(api_key=api_key, base_url=provider["base_url"])
+            _openai_client_mode = mode
+        EMBEDDING_MODEL = model_name or provider["default_model"]
     else:
         raise ValueError(f"Unknown embedding provider: {mode!r}")
+
+    EMBEDDING_MODE = mode
 
 def initLocalEmbedding(model_name=None):
     """Convenience function matching user snippet."""
@@ -128,7 +133,7 @@ def main():
         default="openai",
         help="Cloud embedding provider to use (ignored when --local is set)",
     )
-    parser.add_argument("--model", type=str, help="Override default model name (OpenAI or local)")
+    parser.add_argument("--model", type=str, help="Override the default model of the selected provider or of --local")
     args = parser.parse_args()
 
     # Initialize based on arguments
@@ -137,8 +142,7 @@ def main():
 
     has_any_knowledge = any(Path(f).exists() for f in KNOWLEDGE_FILES)
     if not has_any_knowledge and not Path(CURRICULUM_FILE).exists():
-        print("Error: Neither knowledge nor curriculum files were found.")
-        return
+        sys.exit("Error: Neither knowledge nor curriculum files were found.")
 
     print(f"Connecting to Agent LTM at: {DB_PATH}")
     os.makedirs(DB_PATH, exist_ok=True)
@@ -246,8 +250,7 @@ def main():
             try:
                 batch_embeddings = embed_batch(batch_docs)
             except Exception as e:
-                print(f"Fatal error generating embeddings: {e}")
-                return
+                sys.exit(f"Fatal error generating embeddings: {e}")
             
             collection.upsert(
                 ids=batch_ids,
