@@ -20,7 +20,7 @@ class MemoryTransfer:
 
     def export(
         self,
-        component: str = "both",
+        component: str = "all",
         include_embeddings: bool = True,
         filename: str | None = None,
     ) -> dict:
@@ -38,6 +38,7 @@ class MemoryTransfer:
         mode: str = "overwrite",
         include_history: bool = True,
         include_vectors: bool = True,
+        include_skills: bool = True,
     ) -> dict:
         return import_archive(
             self.store,
@@ -46,6 +47,7 @@ class MemoryTransfer:
             mode,
             include_history,
             include_vectors,
+            include_skills,
         )
 
     def recover(self) -> dict:

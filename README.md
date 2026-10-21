@@ -110,7 +110,7 @@ transfer = MemoryTransfer(
     store=store,
 )
 
-exported = transfer.export(component="both")
+exported = transfer.export(component="all")
 transfer.import_archive(exported["filename"])
 transfer.recover()
 ```

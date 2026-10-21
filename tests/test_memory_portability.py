@@ -26,6 +26,8 @@ def make_store(tmp_path, name, embed_batch=None, store_class=MemoryStore):
         chroma_path=tmp_path / name / "chroma",
         embed_batch=embed_batch,
         embedding_profile=PROFILE,
+        skills_dir=tmp_path / name / "memory" / "workflow" / "skills",
+        space_dir=tmp_path / name / "memory" / "workflow" / "space",
     )
 
 
@@ -48,7 +50,7 @@ def test_round_trip_restores_user_memory_and_preserves_knowledge(tmp_path):
     source.upsert_records([record("source-memory", "remember me")])
 
     transfer = MemoryTransfer(tmp_path / "transfer", source)
-    exported = transfer.export("both", filename="memory.tar.gz")
+    exported = transfer.export("all", filename="memory.tar.gz")
 
     with tarfile.open(tmp_path / "transfer" / exported["filename"], "r:gz") as archive:
         assert set(archive.getnames()) == {
@@ -136,7 +138,7 @@ def test_append_namespaces_ids_and_preserves_existing_records(tmp_path):
     source.write_history("imported history\n")
     source.upsert_records([record("shared-id", "imported")])
     transfer_dir = tmp_path / "transfer"
-    MemoryTransfer(transfer_dir, source).export("both", filename="append.tar.gz")
+    MemoryTransfer(transfer_dir, source).export("all", filename="append.tar.gz")
 
     target = make_store(tmp_path, "target")
     target.write_history("existing history\n")
@@ -165,21 +167,21 @@ def test_unpack_rejects_unsafe_member(tmp_path):
 class FailOnceStore(MemoryStore):
     fail_next_smoke_test = True
 
-    def smoke_test(self, history, vectors):
+    def smoke_test(self, history, vectors, skills=False):
         if self.fail_next_smoke_test:
             self.fail_next_smoke_test = False
             raise RuntimeError("simulated post-import failure")
-        super().smoke_test(history, vectors)
+        super().smoke_test(history, vectors, skills)
 
 
 class CrashOnceStore(MemoryStore):
     crash_next_smoke_test = True
 
-    def smoke_test(self, history, vectors):
+    def smoke_test(self, history, vectors, skills=False):
         if self.crash_next_smoke_test:
             self.crash_next_smoke_test = False
             raise KeyboardInterrupt("simulated process interruption")
-        super().smoke_test(history, vectors)
+        super().smoke_test(history, vectors, skills)
 
 
 def test_failed_overwrite_restores_previous_memory(tmp_path):
@@ -187,7 +189,7 @@ def test_failed_overwrite_restores_previous_memory(tmp_path):
     source.write_history("source history\n")
     source.upsert_records([record("source-memory", "source")])
     transfer_dir = tmp_path / "transfer"
-    MemoryTransfer(transfer_dir, source).export("both", filename="rollback.tar.gz")
+    MemoryTransfer(transfer_dir, source).export("all", filename="rollback.tar.gz")
 
     target = make_store(tmp_path, "target", store_class=FailOnceStore)
     target.write_history("target history\n")
@@ -200,12 +202,31 @@ def test_failed_overwrite_restores_previous_memory(tmp_path):
     assert [item["id"] for item in user_records(target)] == ["target-memory"]
 
 
+def test_failed_overwrite_restores_previous_skills(tmp_path):
+    source = make_store(tmp_path, "source")
+    (source.skills_dir / "new-skill").mkdir(parents=True)
+    (source.skills_dir / "new-skill" / "SKILL.md").write_text("new", encoding="utf-8")
+    transfer_dir = tmp_path / "transfer"
+    MemoryTransfer(transfer_dir, source).export("skills", filename="skills.tar.gz")
+
+    target = make_store(tmp_path, "target", store_class=FailOnceStore)
+    (target.space_dir / "research").mkdir(parents=True)
+    (target.space_dir / "research" / "notes.md").write_text("notes", encoding="utf-8")
+    (target.skills_dir / "old-skill").mkdir(parents=True)
+
+    with pytest.raises(MemoryImportError, match="rolled back"):
+        MemoryTransfer(transfer_dir, target).import_archive("skills.tar.gz")
+
+    assert [path.name for path in target.skills_dir.iterdir()] == ["old-skill"]
+    assert (target.space_dir / "research" / "notes.md").read_text(encoding="utf-8") == "notes"
+
+
 def test_failed_overwrite_removes_vector_store_created_for_fresh_memory(tmp_path):
     source = make_store(tmp_path, "source")
     source.write_history("source history\n")
     source.upsert_records([record("source-memory", "source")])
     transfer_dir = tmp_path / "transfer"
-    MemoryTransfer(transfer_dir, source).export("both", filename="fresh.tar.gz")
+    MemoryTransfer(transfer_dir, source).export("all", filename="fresh.tar.gz")
 
     target = make_store(tmp_path, "fresh-target", store_class=FailOnceStore)
     assert target.history_path.exists() is False
@@ -250,7 +271,7 @@ def test_recover_rolls_back_an_interrupted_overwrite(tmp_path):
     source.write_history("source history\n")
     source.upsert_records([record("source-memory", "source")])
     transfer_dir = tmp_path / "transfer"
-    MemoryTransfer(transfer_dir, source).export("both", filename="recovery.tar.gz")
+    MemoryTransfer(transfer_dir, source).export("all", filename="recovery.tar.gz")
 
     target = make_store(tmp_path, "target", store_class=CrashOnceStore)
     target.write_history("target history\n")

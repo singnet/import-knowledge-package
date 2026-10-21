@@ -13,8 +13,11 @@ MANIFEST_NAME = "manifest.json"
 COMPONENT_FILES = {
     "history": {"history/history.metta"},
     "ltm": {"vector/collections.json", "vector/records.jsonl"},
+    "skills": set(),
 }
 ALLOWLIST = frozenset({MANIFEST_NAME, *set().union(*COMPONENT_FILES.values())})
+SKILLS_DIRS = ("skills", "space")
+SKILLS_PREFIXES = tuple(f"{name}/" for name in SKILLS_DIRS)
 MAX_COMPRESSED_BYTES = 500 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024
 
@@ -29,10 +32,14 @@ def expected_members(components: list[str]) -> set[str]:
     return members
 
 
+def is_allowed_member(name: str) -> bool:
+    return name in ALLOWLIST or name.startswith(SKILLS_PREFIXES)
+
+
 def pack(staging: Path, destination: Path, members: set[str]) -> None:
     if destination.exists():
         raise FileExistsError(f"Archive destination already exists: {destination}")
-    if not members or not members <= ALLOWLIST:
+    if not members or not all(is_allowed_member(name) for name in members):
         raise ArchiveValidationError("Archive member set is empty or unsupported")
     missing = [name for name in members if not (staging / name).is_file()]
     if missing:
@@ -64,7 +71,7 @@ def unpack(archive_path: Path, destination: Path) -> set[str]:
             for member in members:
                 name = member.name
                 path = Path(name)
-                if name not in ALLOWLIST:
+                if not is_allowed_member(name):
                     raise ArchiveValidationError(f"Unexpected archive member: {name!r}")
                 if name in seen:
                     raise ArchiveValidationError(f"Duplicate archive member: {name!r}")
