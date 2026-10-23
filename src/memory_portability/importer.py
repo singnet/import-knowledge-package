@@ -32,10 +32,11 @@ def import_archive(
     mode: str = "overwrite",
     include_history: bool = True,
     include_vectors: bool = True,
+    include_skills: bool = True,
 ) -> dict:
     if mode not in {"overwrite", "append"}:
         raise ValueError("mode must be 'overwrite' or 'append'")
-    if not include_history and not include_vectors:
+    if not (include_history or include_vectors or include_skills):
         raise ValueError("At least one memory component must be enabled")
     _validate_filename(filename)
     archive_path = transfer_dir.resolve() / filename
@@ -55,10 +56,11 @@ def import_archive(
         components = manifest["components"]
         do_history = include_history and "history" in components
         do_vectors = include_vectors and "ltm" in components
-        if not do_history and not do_vectors:
+        do_skills = include_skills and "skills" in components
+        if not (do_history or do_vectors or do_skills):
             raise MemoryImportError("Selected components are not present in the archive")
 
-        receipt = _receipt_path(state_dir, digest, mode, do_history, do_vectors)
+        receipt = _receipt_path(state_dir, digest, mode, do_history, do_vectors, do_skills)
         if receipt.exists():
             return {"status": "already-imported", "receipt": receipt.name}
 
@@ -74,17 +76,18 @@ def import_archive(
 
         if mode == "overwrite":
             _import_overwrite(
-                store, staging, do_history, do_vectors, marker, receipt, digest
+                store, staging, do_history, do_vectors, do_skills, marker, receipt, digest
             )
         else:
             _import_append(
-                store, staging, do_history, do_vectors, marker, receipt, digest
+                store, staging, do_history, do_vectors, do_skills, marker, receipt, digest
             )
         return {
             "status": "imported",
             "mode": mode,
             "history": do_history,
             "ltm": do_vectors,
+            "skills": do_skills,
             "reembedded": reembedded,
             "receipt": receipt.name,
         }
@@ -120,6 +123,8 @@ def recover(store: MemoryStore) -> dict:
         elif mode == "append":
             if marker.get("history"):
                 _restore_history(store, state_dir / ROLLBACK_NAME)
+            if marker.get("skills"):
+                store.load_skills(state_dir / ROLLBACK_NAME / "skills", replace=True)
             append_ids = marker.get("append_ids")
             if not isinstance(append_ids, list) or any(
                 not isinstance(record_id, str) for record_id in append_ids
@@ -139,18 +144,20 @@ def _import_overwrite(
     staging: Path,
     history: bool,
     vectors: bool,
+    skills: bool,
     marker: Path,
     receipt: Path,
     digest: str,
 ) -> None:
     rollback = store.state_dir / ROLLBACK_NAME
-    _create_rollback(store, rollback, history, vectors)
+    _create_rollback(store, rollback, history, vectors, skills)
     _write_json_atomic(
         marker,
         {
             "mode": "overwrite",
             "history": history,
             "vectors": vectors,
+            "skills": skills,
             "receipt": receipt.name,
         },
     )
@@ -161,7 +168,9 @@ def _import_overwrite(
             )
         if vectors:
             store.replace_user_records(iter_records(staging / "vector/records.jsonl"))
-        store.smoke_test(history, vectors)
+        if skills:
+            store.load_skills(staging, replace=True)
+        store.smoke_test(history, vectors, skills)
     except Exception as exc:
         try:
             _restore_rollback(store, rollback)
@@ -172,7 +181,7 @@ def _import_overwrite(
         _finish_transaction(store.state_dir)
         raise MemoryImportError(f"Overwrite import failed and was rolled back: {exc}") from exc
 
-    _write_receipt(receipt, digest, "overwrite", history, vectors)
+    _write_receipt(receipt, digest, "overwrite", history, vectors, skills)
     _finish_transaction(store.state_dir)
 
 
@@ -181,17 +190,19 @@ def _import_append(
     staging: Path,
     history: bool,
     vectors: bool,
+    skills: bool,
     marker: Path,
     receipt: Path,
     digest: str,
 ) -> None:
     rollback = store.state_dir / ROLLBACK_NAME
-    _create_rollback(store, rollback, history, False)
+    _create_rollback(store, rollback, history, False, skills)
     import_id = uuid.uuid4().hex
     marker_value = {
         "mode": "append",
         "history": history,
         "vectors": vectors,
+        "skills": skills,
         "append_ids": [],
         "receipt": receipt.name,
     }
@@ -203,6 +214,9 @@ def _import_append(
                 current_history = store.read_history() or ""
                 separator = "" if not current_history or current_history.endswith("\n") else "\n"
                 store.append_history(separator + text)
+
+        if skills:
+            store.load_skills(staging, replace=False)
 
         if vectors:
             for batch in iter_records(staging / "vector/records.jsonl"):
@@ -225,11 +239,13 @@ def _import_append(
                 marker_value["append_ids"] = intended_ids
                 _write_json_atomic(marker, marker_value)
                 store.upsert_records(appended)
-        store.smoke_test(history, vectors)
+        store.smoke_test(history, vectors, skills)
     except Exception as exc:
         try:
             if history:
                 _restore_history(store, rollback)
+            if skills:
+                store.load_skills(rollback / "skills", replace=True)
             store.delete_records(marker_value["append_ids"])
         except Exception as rollback_error:
             raise MemoryImportError(
@@ -238,16 +254,16 @@ def _import_append(
         _finish_transaction(store.state_dir)
         raise MemoryImportError(f"Append import failed and was rolled back: {exc}") from exc
 
-    _write_receipt(receipt, digest, "append", history, vectors)
+    _write_receipt(receipt, digest, "append", history, vectors, skills)
     _finish_transaction(store.state_dir)
 
 
 def _create_rollback(
-    store: MemoryStore, rollback: Path, history: bool, vectors: bool
+    store: MemoryStore, rollback: Path, history: bool, vectors: bool, skills: bool
 ) -> None:
     shutil.rmtree(rollback, ignore_errors=True)
     rollback.mkdir(parents=True)
-    state = {"history": history, "vectors": vectors}
+    state = {"history": history, "vectors": vectors, "skills": skills}
     if history:
         current = store.read_history()
         state["history_present"] = current is not None
@@ -260,6 +276,8 @@ def _create_rollback(
                 for batch in store.iter_user_records(include_embeddings=True):
                     for record in batch:
                         output.write(json.dumps(record, ensure_ascii=False) + "\n")
+    if skills:
+        store.save_skills(rollback / "skills")
     _write_json_atomic(rollback / "state.json", state)
 
 
@@ -272,9 +290,12 @@ def _restore_rollback(store: MemoryStore, rollback: Path) -> None:
             store.replace_user_records(iter_records(rollback / "records.jsonl"))
         else:
             store.remove_vector_store()
+    if state.get("skills"):
+        store.load_skills(rollback / "skills", replace=True)
     store.smoke_test(
         bool(state.get("history")),
         bool(state.get("vectors") and state.get("chroma_present")),
+        bool(state.get("skills")),
     )
 
 
@@ -310,15 +331,16 @@ def _receipt_path(
     mode: str,
     history: bool,
     vectors: bool,
+    skills: bool,
 ) -> Path:
     components = "-".join(
-        name for name, enabled in (("history", history), ("ltm", vectors)) if enabled
+        name for name, enabled in (("history", history), ("ltm", vectors), ("skills", skills)) if enabled
     )
     return state_dir / RECEIPTS_NAME / f"{digest}-{mode}-{components}.json"
 
 
 def _write_receipt(
-    path: Path, digest: str, mode: str, history: bool, vectors: bool
+    path: Path, digest: str, mode: str, history: bool, vectors: bool, skills: bool
 ) -> None:
     _write_json_atomic(
         path,
@@ -327,6 +349,7 @@ def _write_receipt(
             "mode": mode,
             "history": history,
             "ltm": vectors,
+            "skills": skills,
             "imported_at": datetime.now(timezone.utc).isoformat(),
         },
     )

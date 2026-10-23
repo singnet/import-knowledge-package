@@ -8,7 +8,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .archive import FORMAT_VERSION, MANIFEST_NAME, expected_members
+from .archive import (
+    COMPONENT_FILES,
+    FORMAT_VERSION,
+    MANIFEST_NAME,
+    SKILLS_PREFIXES,
+    expected_members,
+)
 from .errors import ArchiveValidationError
 
 FORMAT_NAME = "omega-user-memory"
@@ -47,20 +53,23 @@ def load_and_validate(staging: Path, actual_members: set[str]) -> tuple[dict, bo
         not isinstance(components, list)
         or not components
         or len(components) != len(set(components))
-        or any(component not in ("history", "ltm") for component in components)
+        or any(component not in COMPONENT_FILES for component in components)
     ):
         raise ArchiveValidationError("Manifest has invalid components")
 
+    files = manifest.get("files")
+    if not isinstance(files, dict):
+        raise ArchiveValidationError("Manifest file list is invalid")
     expected = expected_members(components)
+    if "skills" in components:
+        expected.update(name for name in files if name.startswith(SKILLS_PREFIXES))
     if actual_members != expected:
         raise ArchiveValidationError(
             f"Archive members do not match manifest: expected {sorted(expected)}, "
             f"found {sorted(actual_members)}"
         )
 
-    files = manifest.get("files")
-    expected_files = expected - {MANIFEST_NAME}
-    if not isinstance(files, dict) or set(files) != expected_files:
+    if set(files) != expected - {MANIFEST_NAME}:
         raise ArchiveValidationError("Manifest file list does not match its components")
     for name, description in files.items():
         if not isinstance(description, dict):

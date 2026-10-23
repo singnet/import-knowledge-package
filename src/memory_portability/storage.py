@@ -43,9 +43,13 @@ class MemoryStore:
         collection_name: str = DEFAULT_COLLECTION,
         embed_batch: Callable[[list[str]], list[list[float]]] | None = None,
         embedding_profile: dict[str, Any] | None = None,
+        skills_dir: Path | None = None,
+        space_dir: Path | None = None,
     ) -> None:
         self.memory_dir = Path(memory_dir).resolve()
         self.chroma_path = Path(chroma_path).resolve()
+        self.skills_dir = Path(skills_dir).resolve() if skills_dir else None
+        self.space_dir = Path(space_dir).resolve() if space_dir else None
         self.collection_name = collection_name
         self._embed_batch = embed_batch
         self._embedding_profile = embedding_profile
@@ -216,8 +220,29 @@ class MemoryStore:
             "chromadb_version": chromadb.__version__,
         }
 
-    def smoke_test(self, history: bool, vectors: bool) -> None:
+    def skills_dirs(self) -> dict[str, Path]:
+        if self.skills_dir is None or self.space_dir is None:
+            raise ValueError("skills_dir and space_dir are required to transfer skills")
+        return {"skills": self.skills_dir, "space": self.space_dir}
+
+    def save_skills(self, destination: Path) -> None:
+        for name, path in self.skills_dirs().items():
+            if path.is_dir():
+                shutil.copytree(path, destination / name, symlinks=True)
+
+    def load_skills(self, source: Path, replace: bool) -> None:
+        for name, path in self.skills_dirs().items():
+            if replace and path.exists():
+                shutil.rmtree(path)
+            path.mkdir(parents=True, exist_ok=True)
+            if (source / name).is_dir():
+                shutil.copytree(source / name, path, symlinks=True, dirs_exist_ok=True)
+
+    def smoke_test(self, history: bool, vectors: bool, skills: bool = False) -> None:
         if history:
             self.read_history()
         if vectors:
             self.collection().get(limit=1, include=["documents"])
+        if skills:
+            for path in self.skills_dirs().values():
+                os.listdir(path)

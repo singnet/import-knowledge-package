@@ -9,15 +9,22 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .archive import expected_members, pack, unpack
+from .archive import SKILLS_DIRS, expected_members, pack, unpack
 from .storage import DEFAULT_BATCH_SIZE, MemoryStore
 from .validator import FORMAT_NAME, file_description, load_and_validate, sha256_file
+
+COMPONENTS = {
+    "history": ["history"],
+    "ltm": ["ltm"],
+    "skills": ["skills"],
+    "all": ["history", "ltm", "skills"],
+}
 
 
 def export_memory(
     store: MemoryStore,
     transfer_dir: Path,
-    component: str = "both",
+    component: str = "all",
     include_embeddings: bool = True,
     filename: str | None = None,
 ) -> dict:
@@ -26,9 +33,9 @@ def export_memory(
     The caller must hold Omega's memory-write lock for the duration of this
     synchronous call when a cross-component point-in-time snapshot is required.
     """
-    if component not in {"history", "ltm", "both"}:
-        raise ValueError("component must be 'history', 'ltm', or 'both'")
-    components = ["history", "ltm"] if component == "both" else [component]
+    if component not in COMPONENTS:
+        raise ValueError(f"component must be one of {sorted(COMPONENTS)}")
+    components = COMPONENTS[component]
     transfer_dir = transfer_dir.resolve()
     transfer_dir.mkdir(parents=True, exist_ok=True)
     if not transfer_dir.is_dir():
@@ -45,6 +52,7 @@ def export_memory(
     staging.mkdir()
     record_count = 0
     try:
+        members = expected_members(components)
         if "history" in components:
             history_path = staging / "history/history.metta"
             history_path.parent.mkdir(parents=True)
@@ -73,8 +81,17 @@ def export_memory(
                 json.dumps(collections, indent=2, sort_keys=True), encoding="utf-8"
             )
 
+        if "skills" in components:
+            store.save_skills(staging)
+            members.update(
+                path.relative_to(staging).as_posix()
+                for name in SKILLS_DIRS
+                for path in (staging / name).rglob("*")
+                if path.is_file() and not path.is_symlink()
+            )
+
         files = {}
-        for name in expected_members(components) - {"manifest.json"}:
+        for name in members - {"manifest.json"}:
             files[name] = file_description(staging / name)
         manifest = {
             "format": FORMAT_NAME,
@@ -90,7 +107,6 @@ def export_memory(
             json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
         )
 
-        members = expected_members(components)
         pack(staging, temporary_archive, members)
         verification = staging / ".verification"
         actual_members = unpack(temporary_archive, verification)
