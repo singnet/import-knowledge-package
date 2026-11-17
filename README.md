@@ -5,7 +5,7 @@ A utility package for importing distilled knowledge into a ChromaDB-based Long-T
 ## Purpose
 The `import-kb` package is designed to bridge the gap between static knowledge files (JSONL, MeTTa) and an active agent's memory. It processes structured knowledge, generates vector embeddings, and upserts them into a ChromaDB collection, enabling semantic search and retrieval for AI agents.
 
-The package also provides `memory_portability`, a programmatic interface for exporting and restoring Omega conversation history and user LTM records. Omega Core remains responsible for its CLI, container lifecycle, transfer-directory mount, and user-facing decisions.
+The package also provides `memory_portability`, a programmatic interface for exporting and restoring Omega conversation history, user LTM records, skills, and workflow space. Omega Core remains responsible for its CLI, container lifecycle, transfer-directory mount, and user-facing decisions.
 
 ## Supported Embedding Models
 This package supports the following embedding modes:
@@ -18,7 +18,7 @@ This package supports the following embedding modes:
   - Uses an OpenAI-compatible endpoint hosted by ASI Cloud, requires an API key.
 - **SentenceTransformers (Local)**:
   - Default model: `intfloat/e5-large-v2`
-  - Runs fully offline on your local machine.
+  - Runs locally; the model may need to be downloaded before it can be used offline.
   - Can be configured to use any model compatible with the `sentence-transformers` library (e.g., `all-MiniLM-L6-v2`).
 
 ## Installation
@@ -78,17 +78,20 @@ python3 -m import_knowledge.import_knowledge --local
 ```
 
 ### Programmatic Usage
-You can initialize the embedding system and trigger the import programmatically from your Python scripts:
+You can initialize the embedding system and embed text from your Python scripts:
 
 ```python
-from import_knowledge import initLocalEmbedding, main
+from import_knowledge.import_knowledge import embed_batch, initLocalEmbedding
 
 # Initialize for local use
 initLocalEmbedding(model_name="intfloat/e5-large-v2")
 
-# Run the import process
-main()
+# Generate embeddings for a batch of texts
+embeddings = embed_batch(["Example text"])
 ```
+
+To import the bundled knowledge files, use the CLI shown above. Its `main()`
+function parses command-line arguments and initializes the selected provider.
 
 ### Memory portability
 
@@ -178,4 +181,4 @@ release.
 
 ## License
 
-This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
